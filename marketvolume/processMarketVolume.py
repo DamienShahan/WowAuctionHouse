@@ -42,31 +42,20 @@ def dataframe_difference_quantity(df1: pd.DataFrame, df2: pd.DataFrame, which=No
         diff_df = comparison_df[comparison_df['_merge'] == which]
     return diff_df
 
-def wasAuctionNewEnough(df1, df2, item, auction_id, minRightOnly):
-    """Compare the rows, to see if it was new enough to be bought"""
-    # Check 1: if there is an intersecting auction_id between left_only and right_only.
+def getCutOffAuctionId(df1, df2, item, minRightOnly):
+    # Check if there is an intersecting auction_id between left_only and right_only.
     # If yes, this auction_id and all auction_ids with a greater value were new Enough.
     # All auction_ids with a lesser value were not new enough
-
     dataDifferences = dataframe_difference_quantity(df1[df1['item_id']==item],df2[df2['item_id']==item])
     try:
         cutOffId = getIntersectId(dataDifferences[dataDifferences['_merge']=='left_only'], dataDifferences[dataDifferences['_merge']=='right_only'])
-        print("checkpoint C")
-        if cutOffId > auction_id:
-            answer = False
-        else:
-            answer = True
+        #print("Yes intersection")
+        cutOffAuctionId = cutOffId
     except:
-        print("No intersection")
+        #print("No intersection")
+        cutOffAuctionId = minRightOnly
 
-    # Check 2: if there is no intersection, all auction_ids with a smaller value than the smallest right_only auction_id were not new enough
-    if minRightOnly > auction_id:
-            answer = False
-    else:
-        answer = True
-
-    # Return True/False
-    return answer
+    return cutOffAuctionId
 
 def getIntersectId(df1, df2):
     """Get the intersecting Id, if there is one"""
@@ -103,8 +92,12 @@ for region in regionList:
         totalMarketActions = pd.DataFrame()
 
         # Loop through uniqueItems, generating data for each item 
+        itemCounter = 0
+        totalItems = len(uniqueItems)
         for item in uniqueItems:
-            print(f"Item: {item}")
+            itemCounter = itemCounter + 1
+            print(f"Item {itemCounter}/{totalItems}")
+            #print(f"Item: {item}")
             # Variables
             singleMarketActions = {'item_id':item, 'amountExpired': 0, 'amountSold': 0, 'amountCanceled': 0, 'amountAdded': 0}
 
@@ -117,6 +110,13 @@ for region in regionList:
             # Only amount after paritally sold or totally new auctions
             rightMarketData = itemMarketChanges[itemMarketChanges['_merge'] == 'right_only']
             #rightMarketData
+
+            # Get the cutOff auction ID
+            if rightMarketData.empty:
+                minRightOnly = 0
+            else:
+                minRightOnly = min(rightMarketData['auction_id'])
+            cutOffAuctionId = getCutOffAuctionId(startMarketValues, endMarketValues, item, minRightOnly)
 
             # Sold / Canceled / Expired
             for index, olderData in leftMarketData.iterrows():
@@ -131,12 +131,7 @@ for region in regionList:
                         singleMarketActions['amountExpired'] = singleMarketActions['amountExpired'] + olderData['quantity']
                     else:
                         # If the time_left was not SHORT and it was the newest auction -> we assume it was bought
-                        # Get min auction_id if rightMarketData is not null
-                        if rightMarketData.empty:
-                            minRightOnly = 0
-                        else:
-                            minRightOnly = min(rightMarketData['auction_id'])
-                        if wasAuctionNewEnough(startMarketValues, endMarketValues, item, olderData['auction_id'], minRightOnly):
+                        if cutOffAuctionId <= olderData['auction_id']:
                             #print(f"{olderData['auction_id']} was sold")
                             singleMarketActions['amountSold'] = singleMarketActions['amountSold'] + olderData['quantity']
                         # If we don't assume it was bought and the time_left was MEDIUM -> we assume it expired
@@ -184,10 +179,5 @@ for region in regionList:
         totalMarketActions.to_csv(filename, index=False)
         print(f'Saved data to ahData/{region}/{server}/marketVolume_{curDatetime}.csv')
 
-# Get 2 files
-# get changes in files
-#   sold / canceled / expired logic
-# save sold, canceled, expired values to hourly market actions file
-# Sum data from hourly market action file
 #   Saved summed data to serverMarketVolume db
 #       DB structure: item_id, sold, canceled, expired, datetime (to hour)
